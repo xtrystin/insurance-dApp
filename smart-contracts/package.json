@@ -5,7 +5,10 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "node": "hardhat node",
+    "deploy:localhost": "hardhat run --network localhost scripts/deploy.js",
+    "check:localhost": "hardhat run --network localhost scripts/check-local.js",
+    "test": "hardhat test"
   },
   "keywords": [],
   "author": "",

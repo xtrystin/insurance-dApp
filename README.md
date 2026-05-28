@@ -25,7 +25,7 @@ Open your terminal, navigate to the `smart-contracts` folder, install dependenci
 ```bash
 cd smart-contracts
 npm install
-npx hardhat node
+npm run node
 ```
 *Keep this terminal window open. Hardhat will print a list of 20 **test accounts** with 10,000 fake ETH each, along with their private keys.*
 
@@ -36,9 +36,18 @@ Open a **second terminal window**, navigate to `smart-contracts`, and run the de
 ```bash
 cd smart-contracts
 npx hardhat compile
-npx hardhat run scripts/deploy.js --network localhost
+npm run deploy:localhost
 ```
-*Note: If the terminal outputs a contract address different from the one currently in `frontend/src/App.jsx` (variable `CONTRACT_ADDRESS`), **you must copy the new address and paste it** into `App.jsx`.*
+The deployment script writes the active contract address and ABI to `frontend/src/contracts/deployments.json`.
+Do not edit contract addresses in React files manually; redeploy the contract instead.
+
+## Data and Contract Architecture
+
+- The blockchain contract remains the source of truth for policies, ownership, claims and admin permissions.
+- The frontend does not use a database and does not persist application data in local JSON files.
+- `frontend/src/contracts/deployments.json` is only a generated deployment manifest: it stores ABI and address per chain so the frontend can connect to the right contract.
+- The contract exposes aggregate read methods (`getPolicies`, `getClaims`, `getUserPolicyIds`, `getUserClaims`) so the UI does not need many sequential reads or a file-based cache.
+- Claim payout uses a guarded `call` flow instead of `transfer`, with validation for invalid IDs, zero addresses and empty/oversized text fields.
 
 ### 3. Start the Frontend Application
 

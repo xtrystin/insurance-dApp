@@ -1,14 +1,34 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
-import InsuranceArtifact from './abis/Insurance.json';
-import ContractAddressInfo from './abis/contract-address.json';
+import deployments from './contracts/deployments.json';
 
-const CONTRACT_ADDRESS = ContractAddressInfo.address;
+const REQUIRED_CHAIN_ID = 31337n;
+
+const getInsuranceDeployment = (chainId) => deployments[chainId.toString()]?.Insurance;
+
+const assertDeploymentMatchesChain = async (_provider, deployment) => {
+  const deployedCode = await _provider.getCode(deployment.address);
+  if (deployedCode === "0x") {
+    throw new Error(`Pod adresem ${deployment.address} nie ma kontraktu. Uruchom deploy na aktywną sieć localhost i odśwież aplikację.`);
+  }
+
+  const deployedBytecodeHash = ethers.keccak256(deployedCode);
+  if (deployment.deployedBytecodeHash && deployedBytecodeHash !== deployment.deployedBytecodeHash) {
+    throw new Error(`ABI frontendu nie pasuje do kontraktu pod adresem ${deployment.address}. Zrestartuj hardhat node, uruchom ponownie deploy i odśwież aplikację.`);
+  }
+};
 
 function App() {
-  const [provider, setProvider] = useState(null);
-  const [signer, setSigner] = useState(null);
+  const [provider] = useState(() => {
+    if (!window.ethereum) {
+      console.error("Please install MetaMask!");
+      return null;
+    }
+
+    return new ethers.BrowserProvider(window.ethereum);
+  });
   const [contract, setContract] = useState(null);
+  const [contractAddress, setContractAddress] = useState("");
   const [account, setAccount] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
   const [lastError, setLastError] = useState(null);
@@ -16,6 +36,7 @@ function App() {
   const [policies, setPolicies] = useState([]);
   const [ownedPolicies, setOwnedPolicies] = useState([]);
   const [claims, setClaims] = useState([]);
+  const [contractBalance, setContractBalance] = useState("0.0");
 
   // Form states
   const [newPolicy, setNewPolicy] = useState({ name: "", premium: "", payout: "" });
@@ -25,33 +46,6 @@ function App() {
   const [editingPolicyId, setEditingPolicyId] = useState(null);
   const [editForm, setEditForm] = useState({ name: "", premium: "", payout: "", isActive: true });
   const [adminList, setAdminList] = useState([]);
-
-  useEffect(() => {
-    init();
-  }, []);
-
-  const init = async () => {
-    if (window.ethereum) {
-      try {
-        const _provider = new ethers.BrowserProvider(window.ethereum);
-        setProvider(_provider);
-        
-        // Listen to account changes
-        window.ethereum.on('accountsChanged', (accounts) => {
-          if (accounts.length > 0) {
-            connectWallet();
-          } else {
-            setAccount("");
-            setIsAdmin(false);
-          }
-        });
-      } catch (error) {
-        console.error("Error init:", error);
-      }
-    } else {
-      console.error("Please install MetaMask!");
-    }
-  };
 
   const switchNetwork = async () => {
     try {
@@ -86,11 +80,14 @@ function App() {
 
   const disconnectWallet = () => {
     setAccount("");
-    setSigner(null);
     setContract(null);
+    setContractAddress("");
     setIsAdmin(false);
     setPolicies([]);
+    setOwnedPolicies([]);
     setClaims([]);
+    setAdminList([]);
+    setContractBalance("0.0");
     setLastError(null);
   };
 
@@ -99,24 +96,30 @@ function App() {
     try {
       const accounts = await provider.send("eth_requestAccounts", []);
       const _signer = await provider.getSigner();
-      setSigner(_signer);
       setAccount(accounts[0]);
 
       const network = await provider.getNetwork();
-      if (network.chainId !== 31337n) {
+      if (network.chainId !== REQUIRED_CHAIN_ID) {
         throw new Error(`Podłączono do złej sieci (Chain ID: ${network.chainId.toString()}). Wymagana sieć to Localhost (31337). Użyj przycisku poniżej, aby zmienić.`);
       }
 
-      const _contract = new ethers.Contract(CONTRACT_ADDRESS, InsuranceArtifact.abi, _signer);
+      const deployment = getInsuranceDeployment(network.chainId);
+      if (!deployment) {
+        throw new Error(`Brak deploymentu kontraktu Insurance dla Chain ID ${network.chainId.toString()}. Uruchom skrypt deploy i odśwież frontend.`);
+      }
+
+      await assertDeploymentMatchesChain(provider, deployment);
+
+      const _contract = new ethers.Contract(deployment.address, deployment.abi, _signer);
       setContract(_contract);
+      setContractAddress(deployment.address);
 
       try {
-        // Check admin
         const isAdminUser = await _contract.admins(accounts[0]);
         console.log("Connected account:", accounts[0]);
         console.log("Is Admin:", isAdminUser);
         setIsAdmin(isAdminUser);
-        loadData(_contract, accounts[0]);
+        loadData(_contract, accounts[0], isAdminUser);
       } catch (e) {
         console.error("Contract call failed. Are you on the right network (Localhost 8545)?", e);
         setLastError(e.message || JSON.stringify(e));
@@ -127,55 +130,48 @@ function App() {
     }
   };
 
-  const loadData = async (_contract, userAccount) => {
+  const loadData = async (_contract, userAccount, userIsAdmin = isAdmin) => {
     try {
-      // Load policies
-      const pCount = await _contract.policyCount();
-      let loadedPolicies = [];
-      let loadedOwnedPolicies = [];
-      for (let i = 1; i <= pCount; i++) {
-        const p = await _contract.policies(i);
-        const hasPol = await _contract.hasPolicy(userAccount, i);
-        
-        const polObj = {
-          id: p.id.toString(),
+      const [rawPolicies, ownedPolicyIds, adminsArray, rawClaims, rawContractBalance] = await Promise.all([
+        _contract.getPolicies(),
+        _contract.getUserPolicyIds(userAccount),
+        _contract.getAdmins(),
+        userIsAdmin ? _contract.getClaims() : _contract.getUserClaims(userAccount),
+        _contract.getContractBalance(),
+      ]);
+
+      const ownedPolicyIdSet = new Set(ownedPolicyIds.map((id) => id.toString()));
+      const loadedPolicies = rawPolicies.map((p) => {
+        const id = p.id.toString();
+        return {
+          id,
           name: p.name,
           premium: ethers.formatEther(p.premium),
           payout: ethers.formatEther(p.payout),
           isActive: p.isActive,
-          owned: hasPol
+          owned: ownedPolicyIdSet.has(id)
         };
-        
-        loadedPolicies.push(polObj);
-        if (hasPol) {
-          loadedOwnedPolicies.push(polObj);
-        }
-      }
-      setPolicies(loadedPolicies);
-      setOwnedPolicies(loadedOwnedPolicies);
+      });
 
-      // Load admins
-      const adminsArray = await _contract.getAdmins();
+      setPolicies(loadedPolicies);
+      setOwnedPolicies(loadedPolicies.filter((p) => p.owned));
       setAdminList(adminsArray);
 
-      // Load claims
-      const cCount = await _contract.claimCount();
-      let loadedClaims = [];
-      for (let i = 1; i <= cCount; i++) {
-        const c = await _contract.claims(i);
-        loadedClaims.push({
+      const loadedClaims = rawClaims.map((c) => ({
           id: c.id.toString(),
           policyholder: c.policyholder,
           policyId: c.policyId.toString(),
           description: c.description,
+          payoutAmount: ethers.formatEther(c.payoutAmount),
           isApproved: c.isApproved,
           isResolved: c.isResolved,
           resolveMessage: c.resolveMessage
-        });
-      }
+      }));
       setClaims(loadedClaims);
+      setContractBalance(ethers.formatEther(rawContractBalance));
     } catch (error) {
       console.error("Error loading data:", error);
+      setLastError(error.message || JSON.stringify(error));
     }
   };
 
@@ -256,7 +252,7 @@ function App() {
       const tx = await contract.resolveClaim(claimId, approve, rMsg);
       await tx.wait();
       alert("Claim resolved!");
-      loadData(contract, account);
+      loadData(contract, account, isAdmin);
     } catch (error) {
       console.error("Resolve claim error:", error);
       alert("Error resolving claim. Ensure contract has enough ETH.");
@@ -264,13 +260,11 @@ function App() {
   };
 
   const fundContract = async () => {
-    if (!signer) return;
+    if (!contract || !contractAddress) return;
     try {
-      const tx = await signer.sendTransaction({
-        to: CONTRACT_ADDRESS,
-        value: ethers.parseEther("10.0") // Fund with 10 ETH
-      });
+      const tx = await contract.fund({ value: ethers.parseEther("10.0") });
       await tx.wait();
+      loadData(contract, account, isAdmin);
       alert("Contract funded!");
     } catch (error) {
       console.error("Fund error:", error);
@@ -304,6 +298,38 @@ function App() {
       alert("Błąd podczas usuwania administratora.");
     }
   };
+
+  useEffect(() => {
+    if (!window.ethereum) return;
+
+    const handleAccountsChanged = (accounts) => {
+      if (accounts.length > 0) {
+        window.location.reload();
+      } else {
+        setAccount("");
+        setContract(null);
+        setContractAddress("");
+        setIsAdmin(false);
+        setPolicies([]);
+        setOwnedPolicies([]);
+        setClaims([]);
+        setAdminList([]);
+        setContractBalance("0.0");
+      }
+    };
+
+    const handleChainChanged = () => {
+      disconnectWallet();
+    };
+
+    window.ethereum.on('accountsChanged', handleAccountsChanged);
+    window.ethereum.on('chainChanged', handleChainChanged);
+
+    return () => {
+      window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+      window.ethereum.removeListener('chainChanged', handleChainChanged);
+    };
+  }, []);
 
   return (
     <div className="container mt-5 mb-5">
@@ -465,6 +491,7 @@ function App() {
                         <tr>
                           <th>ID Polisy</th>
                           <th>Opis Roszczenia</th>
+                          <th>Wypłata</th>
                           <th>Status</th>
                         </tr>
                       </thead>
@@ -473,6 +500,7 @@ function App() {
                           <tr key={`user-claim-${c.id}`}>
                             <td><strong>#{c.policyId}</strong></td>
                             <td>{c.description}</td>
+                            <td>{c.payoutAmount} ETH</td>
                             <td>
                               <span className={`badge ${c.isResolved ? (c.isApproved ? 'bg-success' : 'bg-danger') : 'bg-secondary'}`}>
                                 {c.isResolved ? (c.isApproved ? 'Zatwierdzone' : 'Odrzucone') : 'Oczekujące'}
@@ -498,6 +526,10 @@ function App() {
                   <button className="btn btn-sm btn-dark" onClick={fundContract}>Zasil Kontrakt (10 ETH)</button>
                 </div>
                 <div className="card-body bg-light">
+                  <div className="alert alert-warning border-warning mb-4">
+                    <strong>Saldo kontraktu:</strong> {contractBalance} ETH
+                  </div>
+
                   <h5 className="border-bottom pb-2 mb-3">Zarządzanie Administratorami</h5>
                   <div className="table-responsive mb-4">
                     <table className="table table-sm table-bordered bg-white">
@@ -557,6 +589,8 @@ function App() {
                           <div className="d-flex justify-content-between align-items-start mb-2">
                             <div>
                               <strong>Polisa ID: {c.policyId}</strong>
+                              <br/>
+                              <small className="text-muted">Wypłata: {c.payoutAmount} ETH</small>
                               <br/>
                               <small className="text-muted">Od: {c.policyholder.substring(0,8)}...{c.policyholder.substring(36)}</small>
                             </div>
