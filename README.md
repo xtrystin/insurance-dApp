@@ -71,6 +71,19 @@ npm run dev
 ```
 *Your application should now be running at `http://localhost:5173/`.*
 
+### 3a. Deploy Frontend to GitHub Pages
+
+To host your frontend application online using GitHub Pages:
+
+1. Ensure you have deployed the smart contract to Sepolia and have the latest `deployments.json`.
+2. Open your terminal in the `frontend` folder.
+3. Run the deployment script:
+   ```bash
+   cd frontend
+   npm run deploy
+   ```
+*This command will automatically build the frontend app and push it to the `gh-pages` branch. Your app will soon be available at `https://<your-username>.github.io/<repository-name>/`.*
+
 ---
 
 ## 🦊 Setting up MetaMask for Local Testing
