@@ -2,8 +2,6 @@ import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import deployments from './contracts/deployments.json';
 
-const REQUIRED_CHAIN_ID = 31337n;
-
 const getInsuranceDeployment = (chainId) => deployments[chainId.toString()]?.Insurance;
 
 const assertDeploymentMatchesChain = async (_provider, deployment) => {
@@ -13,7 +11,10 @@ const assertDeploymentMatchesChain = async (_provider, deployment) => {
   }
 
   const deployedBytecodeHash = ethers.keccak256(deployedCode);
-  if (deployment.deployedBytecodeHash && deployedBytecodeHash !== deployment.deployedBytecodeHash) {
+  const emptyHash = "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
+  if (deployment.deployedBytecodeHash && 
+      deployment.deployedBytecodeHash !== emptyHash && 
+      deployedBytecodeHash !== deployment.deployedBytecodeHash) {
     throw new Error(`ABI frontendu nie pasuje do kontraktu pod adresem ${deployment.address}. Zrestartuj hardhat node, uruchom ponownie deploy i odśwież aplikację.`);
   }
 };
@@ -46,6 +47,7 @@ function App() {
   const [editingPolicyId, setEditingPolicyId] = useState(null);
   const [editForm, setEditForm] = useState({ name: "", premium: "", payout: "", isActive: true });
   const [adminList, setAdminList] = useState([]);
+  const [fundAmount, setFundAmount] = useState("10.0");
 
   const switchNetwork = async () => {
     try {
@@ -99,13 +101,10 @@ function App() {
       setAccount(accounts[0]);
 
       const network = await provider.getNetwork();
-      if (network.chainId !== REQUIRED_CHAIN_ID) {
-        throw new Error(`Podłączono do złej sieci (Chain ID: ${network.chainId.toString()}). Wymagana sieć to Localhost (31337). Użyj przycisku poniżej, aby zmienić.`);
-      }
 
       const deployment = getInsuranceDeployment(network.chainId);
       if (!deployment) {
-        throw new Error(`Brak deploymentu kontraktu Insurance dla Chain ID ${network.chainId.toString()}. Uruchom skrypt deploy i odśwież frontend.`);
+        throw new Error(`Brak wdrożenia kontraktu Insurance dla obecnej sieci (Chain ID: ${network.chainId.toString()}). Proszę zmienić sieć w MetaMask na Localhost (31337) lub Sepolia, lub uruchom deploy.`);
       }
 
       await assertDeploymentMatchesChain(provider, deployment);
@@ -262,7 +261,7 @@ function App() {
   const fundContract = async () => {
     if (!contract || !contractAddress) return;
     try {
-      const tx = await contract.fund({ value: ethers.parseEther("10.0") });
+      const tx = await contract.fund({ value: ethers.parseEther(fundAmount.toString()) });
       await tx.wait();
       loadData(contract, account, isAdmin);
       alert("Contract funded!");
@@ -352,8 +351,6 @@ function App() {
       {lastError && (
         <div className="alert alert-danger shadow-sm">
           <strong>Błąd:</strong> {lastError}
-          <br/><br/>
-          <button className="btn btn-sm btn-outline-danger" onClick={switchNetwork}>Automatycznie połącz z siecią testową</button>
         </div>
       )}
 
@@ -523,7 +520,17 @@ function App() {
               <div className="card shadow mb-4 border-warning">
                 <div className="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
                   <h4 className="mb-0">Panel Administratora</h4>
-                  <button className="btn btn-sm btn-dark" onClick={fundContract}>Zasil Kontrakt (10 ETH)</button>
+                  <div className="d-flex gap-2">
+                    <input 
+                      type="number" 
+                      step="0.01" 
+                      className="form-control form-control-sm" 
+                      style={{width: '90px'}} 
+                      value={fundAmount} 
+                      onChange={(e) => setFundAmount(e.target.value)} 
+                    />
+                    <button className="btn btn-sm btn-dark" onClick={fundContract}>Zasil Kontrakt</button>
+                  </div>
                 </div>
                 <div className="card-body bg-light">
                   <div className="alert alert-warning border-warning mb-4">

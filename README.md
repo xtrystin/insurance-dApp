@@ -41,6 +41,17 @@ npm run deploy:localhost
 The deployment script writes the active contract address and ABI to `frontend/src/contracts/deployments.json`.
 Do not edit contract addresses in React files manually; redeploy the contract instead.
 
+### 2a. Deploy to Sepolia (Testnet)
+
+To deploy the smart contract to the Sepolia testnet instead of the local node, use the Sepolia deployment script:
+
+```bash
+cd smart-contracts
+npx hardhat compile
+npm run deploy:sepolia
+```
+*Note: Make sure your `.env` file in the `smart-contracts` folder is properly configured with your `API_URL` and `PRIVATE_KEY` for Sepolia, and that the account has enough Sepolia ETH for gas.*
+
 ## Data and Contract Architecture
 
 - The blockchain contract remains the source of truth for policies, ownership, claims and admin permissions.
